@@ -44,6 +44,11 @@ def delete_expired_keys():
         pass
 
 
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({"status": "ok"}), 200
+
+
 @app.route("/generate", methods=["POST"])
 @limiter.limit("10 per minute")
 def generate():
@@ -123,4 +128,5 @@ def rate_limit_handler(e):
 
 
 if __name__ == "__main__":
-    app.run(debug=False, host="0.0.0.0", port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=False, host="0.0.0.0", port=port)
