@@ -20,8 +20,9 @@ if not DISCORD_TOKEN:
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+        self.wfile.write(b'{"status": "ok"}')
 
     def log_message(self, format, *args):
         pass
