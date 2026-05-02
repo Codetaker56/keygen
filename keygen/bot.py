@@ -67,6 +67,9 @@ class KeyBot(discord.Client):
     async def on_ready(self):
         print(f"Logged in as {self.user} (ID: {self.user.id})")
 
+    async def on_error(self, event, *args, **kwargs):
+        pass
+
 
 client = KeyBot()
 
@@ -74,7 +77,11 @@ client = KeyBot()
 @client.tree.command(name="generate", description="Generate a new access key (private)")
 @app_commands.describe(duration="How long the key lasts: e.g. 7d, 30m, 2mo, 1y (default: 1d)")
 async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
-    await interaction.response.defer(ephemeral=True)
+    # Respond to Discord immediately to avoid timeout
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except discord.errors.NotFound:
+        return  # Interaction already expired, just bail
 
     parsed = parse_duration(duration)
     if not parsed:
@@ -93,7 +100,7 @@ async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
             async with session.post(
                 f"{API_BASE_URL}/generate",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=10)
+                timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 if resp.status == 201:
                     data = await resp.json()
@@ -134,6 +141,14 @@ async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
             f"❌ Unexpected error: {str(e)}",
             ephemeral=True
         )
+
+
+@client.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    try:
+        await interaction.followup.send("❌ Something went wrong, please try again.", ephemeral=True)
+    except Exception:
+        pass
 
 
 threading.Thread(target=run_ping_server, daemon=True).start()
