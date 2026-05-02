@@ -1,6 +1,8 @@
 import os
 import re
+import threading
 from datetime import datetime, timezone
+from http.server import HTTPServer, BaseHTTPRequestHandler
 import aiohttp
 import discord
 from discord import app_commands
@@ -13,6 +15,23 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:5000")
 
 if not DISCORD_TOKEN:
     raise RuntimeError("Missing DISCORD_TOKEN environment variable.")
+
+
+# Tiny web server to keep Render happy
+class PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is alive!")
+
+    def log_message(self, format, *args):
+        pass  # Suppress access logs
+
+
+def run_ping_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), PingHandler)
+    server.serve_forever()
 
 
 def parse_duration(duration_str: str) -> dict | None:
@@ -81,7 +100,6 @@ async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
                     key = data.get("key", "Unknown")
                     expires_at_str = data.get("expires_at", None)
 
-                    # Build Discord dynamic timestamp
                     if expires_at_str:
                         dt = datetime.fromisoformat(expires_at_str)
                         unix_ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
@@ -117,5 +135,8 @@ async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
             ephemeral=True
         )
 
+
+# Start ping server in background thread
+threading.Thread(target=run_ping_server, daemon=True).start()
 
 client.run(DISCORD_TOKEN)
