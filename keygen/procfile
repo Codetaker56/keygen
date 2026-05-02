@@ -1,1 +1,0 @@
-web: cd keygen && pip install -r requirements.txt && waitress-serve --threads=8 --port=$PORT app:app
