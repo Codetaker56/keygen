@@ -3,3 +3,5 @@ supabase
 flask-limiter
 python-dotenv
 waitress
+aiohttp
+discord.py
