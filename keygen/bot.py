@@ -16,6 +16,9 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "http://localhost:5000")
 if not DISCORD_TOKEN:
     raise RuntimeError("Missing DISCORD_TOKEN environment variable.")
 
+# Store keys list in memory so /deletekey can reference by number
+active_keys_cache = []
+
 
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -140,6 +143,7 @@ async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
 
 @client.tree.command(name="listkeys", description="List all active keys (private)")
 async def list_keys(interaction: discord.Interaction):
+    global active_keys_cache
     try:
         await interaction.response.defer(ephemeral=True)
     except discord.errors.NotFound:
@@ -156,11 +160,14 @@ async def list_keys(interaction: discord.Interaction):
                     keys = data.get("keys", [])
 
                     if not keys:
+                        active_keys_cache = []
                         await interaction.followup.send("📭 No active keys found.", ephemeral=True)
                         return
 
+                    active_keys_cache = keys
+
                     lines = []
-                    for row in keys:
+                    for i, row in enumerate(keys, start=1):
                         key = row.get("key")
                         expires_at_str = row.get("expires_at")
                         if expires_at_str:
@@ -169,11 +176,11 @@ async def list_keys(interaction: discord.Interaction):
                             expiry = f"<t:{unix_ts}:R>"
                         else:
                             expiry = "Never"
-                        lines.append(f"`{key}` — expires {expiry}")
+                        lines.append(f"`{i}.` `{key}` — expires {expiry}")
 
                     message = f"🗝️ **Active Keys ({len(keys)}):**\n" + "\n".join(lines)
+                    message += "\n\n*Use `/deletekey number` to delete a key by its number.*"
 
-                    # Discord has a 2000 char limit
                     if len(message) > 2000:
                         message = message[:1990] + "\n..."
 
@@ -184,29 +191,44 @@ async def list_keys(interaction: discord.Interaction):
         await interaction.followup.send(f"❌ Unexpected error: {str(e)}", ephemeral=True)
 
 
-@client.tree.command(name="deletekey", description="Delete an active key")
-@app_commands.describe(key="The key to delete (e.g. WATER-XXXXX-XXXXX)")
+@client.tree.command(name="deletekey", description="Delete a key by its number from /listkeys or by key value")
+@app_commands.describe(key="The key number (e.g. 1) or full key (e.g. WATER-XXXXX-XXXXX)")
 async def delete_key(interaction: discord.Interaction, key: str):
+    global active_keys_cache
     try:
         await interaction.response.defer(ephemeral=True)
     except discord.errors.NotFound:
         return
 
+    # Check if input is a number
+    key_to_delete = None
+    if key.strip().isdigit():
+        index = int(key.strip()) - 1
+        if index < 0 or index >= len(active_keys_cache):
+            await interaction.followup.send(
+                f"❌ No key with number `{key}`. Run `/listkeys` first to see the list.",
+                ephemeral=True
+            )
+            return
+        key_to_delete = active_keys_cache[index].get("key")
+    else:
+        key_to_delete = key.strip().upper()
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{API_BASE_URL}/deletekey",
-                json={"key": key},
+                json={"key": key_to_delete},
                 timeout=aiohttp.ClientTimeout(total=30)
             ) as resp:
                 if resp.status == 200:
                     await interaction.followup.send(
-                        f"🗑️ Key `{key.upper()}` has been deleted.",
+                        f"🗑️ Key `{key_to_delete}` has been deleted.",
                         ephemeral=True
                     )
                 elif resp.status == 404:
                     await interaction.followup.send(
-                        f"❌ Key `{key.upper()}` not found.",
+                        f"❌ Key `{key_to_delete}` not found.",
                         ephemeral=True
                     )
                 else:
