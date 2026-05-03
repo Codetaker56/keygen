@@ -36,7 +36,7 @@ def run_ping_server():
 
 def parse_duration(duration_str: str) -> dict | None:
     duration_str = duration_str.strip().lower()
-    match = re.fullmatch(r"(\d+(?:\.\d+)?)(mo|m|d|y)", duration_str)
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)(mo|h|m|d|y)", duration_str)
     if not match:
         return None
 
@@ -44,6 +44,8 @@ def parse_duration(duration_str: str) -> dict | None:
 
     if unit == "m":
         return {"duration_minutes": value, "label": f"{int(value)} minute(s)"}
+    elif unit == "h":
+        return {"duration_hours": value, "label": f"{int(value)} hour(s)"}
     elif unit == "d":
         return {"duration_days": value, "label": f"{int(value)} day(s)"}
     elif unit == "mo":
@@ -67,27 +69,23 @@ class KeyBot(discord.Client):
     async def on_ready(self):
         print(f"Logged in as {self.user} (ID: {self.user.id})")
 
-    async def on_error(self, event, *args, **kwargs):
-        pass
-
 
 client = KeyBot()
 
 
 @client.tree.command(name="generate", description="Generate a new access key (private)")
-@app_commands.describe(duration="How long the key lasts: e.g. 7d, 30m, 2mo, 1y (default: 1d)")
+@app_commands.describe(duration="How long the key lasts: e.g. 7d, 12h, 30m, 2mo, 1y (default: 1d)")
 async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
-    # Respond to Discord immediately to avoid timeout
     try:
         await interaction.response.defer(ephemeral=True)
     except discord.errors.NotFound:
-        return  # Interaction already expired, just bail
+        return
 
     parsed = parse_duration(duration)
     if not parsed:
         await interaction.followup.send(
             "❌ Invalid duration format.\n"
-            "Use: `30m` (minutes), `7d` (days), `2mo` (months), `1y` (years)",
+            "Use: `30m` (minutes), `12h` (hours), `7d` (days), `2mo` (months), `1y` (years)",
             ephemeral=True
         )
         return
@@ -137,18 +135,84 @@ async def generate_key(interaction: discord.Interaction, duration: str = "1d"):
             ephemeral=True
         )
     except Exception as e:
-        await interaction.followup.send(
-            f"❌ Unexpected error: {str(e)}",
-            ephemeral=True
-        )
+        await interaction.followup.send(f"❌ Unexpected error: {str(e)}", ephemeral=True)
 
 
-@client.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+@client.tree.command(name="listkeys", description="List all active keys (private)")
+async def list_keys(interaction: discord.Interaction):
     try:
-        await interaction.followup.send("❌ Something went wrong, please try again.", ephemeral=True)
-    except Exception:
-        pass
+        await interaction.response.defer(ephemeral=True)
+    except discord.errors.NotFound:
+        return
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"{API_BASE_URL}/listkeys",
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    keys = data.get("keys", [])
+
+                    if not keys:
+                        await interaction.followup.send("📭 No active keys found.", ephemeral=True)
+                        return
+
+                    lines = []
+                    for row in keys:
+                        key = row.get("key")
+                        expires_at_str = row.get("expires_at")
+                        if expires_at_str:
+                            dt = datetime.fromisoformat(expires_at_str)
+                            unix_ts = int(dt.replace(tzinfo=timezone.utc).timestamp())
+                            expiry = f"<t:{unix_ts}:R>"
+                        else:
+                            expiry = "Never"
+                        lines.append(f"`{key}` — expires {expiry}")
+
+                    message = f"🗝️ **Active Keys ({len(keys)}):**\n" + "\n".join(lines)
+
+                    # Discord has a 2000 char limit
+                    if len(message) > 2000:
+                        message = message[:1990] + "\n..."
+
+                    await interaction.followup.send(message, ephemeral=True)
+                else:
+                    await interaction.followup.send("❌ Failed to fetch keys.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Unexpected error: {str(e)}", ephemeral=True)
+
+
+@client.tree.command(name="deletekey", description="Delete an active key")
+@app_commands.describe(key="The key to delete (e.g. WATER-XXXXX-XXXXX)")
+async def delete_key(interaction: discord.Interaction, key: str):
+    try:
+        await interaction.response.defer(ephemeral=True)
+    except discord.errors.NotFound:
+        return
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{API_BASE_URL}/deletekey",
+                json={"key": key},
+                timeout=aiohttp.ClientTimeout(total=30)
+            ) as resp:
+                if resp.status == 200:
+                    await interaction.followup.send(
+                        f"🗑️ Key `{key.upper()}` has been deleted.",
+                        ephemeral=True
+                    )
+                elif resp.status == 404:
+                    await interaction.followup.send(
+                        f"❌ Key `{key.upper()}` not found.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send("❌ Failed to delete key.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f"❌ Unexpected error: {str(e)}", ephemeral=True)
 
 
 threading.Thread(target=run_ping_server, daemon=True).start()
