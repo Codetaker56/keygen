@@ -53,9 +53,7 @@ def health():
 @limiter.limit("10 per minute")
 def generate():
     delete_expired_keys()
-
     data = request.get_json(silent=True) or {}
-
     duration_hours = data.get("duration_hours")
     duration_days = data.get("duration_days")
     duration_minutes = data.get("duration_minutes")
@@ -95,7 +93,6 @@ def generate():
 @limiter.limit("30 per minute")
 def validate():
     delete_expired_keys()
-
     data = request.get_json(silent=True)
     if not data or "key" not in data:
         return jsonify({"error": "Missing 'key' in request body."}), 400
@@ -105,19 +102,42 @@ def validate():
 
     try:
         result = supabase.table("keys").select("key", "expires_at").eq("key", key_to_check).execute()
-
         if not result.data:
             return jsonify({"valid": False}), 200
-
         row = result.data[0]
         expires_at = row.get("expires_at")
-
         if expires_at and expires_at < now:
             supabase.table("keys").delete().eq("key", key_to_check).execute()
             return jsonify({"valid": False, "reason": "expired"}), 200
-
         return jsonify({"valid": True}), 200
+    except Exception as e:
+        return jsonify({"error": "Database error", "detail": str(e)}), 500
 
+
+@app.route("/listkeys", methods=["GET"])
+def list_keys():
+    delete_expired_keys()
+    try:
+        result = supabase.table("keys").select("key", "expires_at", "created_at").order("created_at", desc=True).execute()
+        return jsonify({"keys": result.data}), 200
+    except Exception as e:
+        return jsonify({"error": "Database error", "detail": str(e)}), 500
+
+
+@app.route("/deletekey", methods=["POST"])
+def delete_key():
+    data = request.get_json(silent=True)
+    if not data or "key" not in data:
+        return jsonify({"error": "Missing 'key' in request body."}), 400
+
+    key_to_delete = str(data["key"]).strip().upper()
+
+    try:
+        result = supabase.table("keys").select("key").eq("key", key_to_delete).execute()
+        if not result.data:
+            return jsonify({"error": "Key not found."}), 404
+        supabase.table("keys").delete().eq("key", key_to_delete).execute()
+        return jsonify({"deleted": True, "key": key_to_delete}), 200
     except Exception as e:
         return jsonify({"error": "Database error", "detail": str(e)}), 500
 
